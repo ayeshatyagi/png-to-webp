@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PNG to WebP</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: "IBM Plex Mono", "Consolas", monospace;
+      background: #0d0d0d;
+      color: #e0e0e0;
+      min-height: 100vh;
+      margin: 0;
+      padding: 2rem;
+    }
+    h1 {
+      font-size: 1rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin: 0 0 2rem;
+      color: #888;
+    }
+    .dropzone {
+      border: 2px dashed #333;
+      border-radius: 8px;
+      padding: 4rem 2rem;
+      text-align: center;
+      transition: border-color 0.15s, background 0.15s;
+      cursor: pointer;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: #444;
+      background: #141414;
+    }
+    .dropzone p {
+      margin: 0;
+      color: #666;
+      font-size: 0.9rem;
+    }
+    .dropzone.dragover p { color: #888; }
+    .quality-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    .quality-row label {
+      color: #666;
+      font-size: 0.85rem;
+    }
+    .quality-row input[type="range"] {
+      width: 120px;
+      accent-color: #555;
+    }
+    .quality-row span { color: #888; font-size: 0.85rem; }
+    .queue {
+      margin-top: 2rem;
+    }
+    .queue-item {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem;
+      background: #141414;
+      border-radius: 6px;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+    }
+    .queue-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queue-item .size { color: #555; }
+    .queue-item .status { color: #666; }
+    .queue-item.done .status { color: #4a9; }
+    .queue-item.error .status { color: #c55; }
+    .queue-item button {
+      background: none;
+      border: 1px solid #444;
+      color: #888;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.8rem;
+    }
+    .queue-item button:hover { border-color: #666; color: #ccc; }
+    .queue-item button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .queue-empty { color: #444; font-size: 0.9rem; margin-top: 1rem; }
+    input[type="file"] { display: none; }
+    .bulk-actions { margin-top: 1rem; }
+    .bulk-actions button {
+      background: #222;
+      border: 1px solid #444;
+      color: #ccc;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+    .bulk-actions button:hover { background: #2a2a2a; border-color: #555; }
+    .bulk-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>PNG → WebP</h1>
+  <div class="dropzone" id="dropzone">
+    <p>Drop PNG files here or click to select</p>
+    <input type="file" id="fileInput" accept="image/png" multiple>
+  </div>
+  <div class="quality-row">
+    <label for="quality">Quality</label>
+    <input type="range" id="quality" min="1" max="100" value="80">
+    <span id="qualityVal">80</span>
+  </div>
+  <div class="bulk-actions" id="bulkActions" style="display: none;">
+    <button type="button" id="bulkDownload">Download all</button>
+  </div>
+  <div class="queue" id="queue"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script>
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("fileInput");
+    const qualityInput = document.getElementById("quality");
+    const qualityVal = document.getElementById("qualityVal");
+    const queueEl = document.getElementById("queue");
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("dragover");
+      const files = [...e.dataTransfer.files].filter(f => f.type === "image/png");
+      addFiles(files);
+    });
+    fileInput.addEventListener("change", () => {
+      addFiles([...fileInput.files]);
+      fileInput.value = "";
+    });
+
+    qualityInput.addEventListener("input", () => { qualityVal.textContent = qualityInput.value; });
+
+    const items = new Map();
+
+    function addFiles(files) {
+      for (const f of files) {
+        const id = crypto.randomUUID();
+        const div = document.createElement("div");
+        div.className = "queue-item";
+        div.dataset.id = id;
+        div.innerHTML = `
+          <span class="name">${escapeHtml(f.name)}</span>
+          <span class="size">${formatSize(f.size)}</span>
+          <span class="status">pending</span>
+          <button type="button" disabled>Download</button>
+        `;
+        queueEl.appendChild(div);
+        items.set(id, { file: f, div, webpBlob: null });
+        div.querySelector("button").addEventListener("click", () => download(id));
+      }
+      updateBulkButton();
+      processQueue();
+    }
+
+    function updateBulkButton() {
+      const done = [...items.values()].filter(v => v.webpBlob !== null);
+      const bulkEl = document.getElementById("bulkActions");
+      const btn = document.getElementById("bulkDownload");
+      if (done.length > 0) {
+        bulkEl.style.display = "block";
+        btn.disabled = false;
+      } else {
+        bulkEl.style.display = "none";
+      }
+    }
+
+    async function processQueue() {
+      const pending = [...items.entries()].filter(([_, v]) => v.webpBlob === null);
+      for (const [id, { file, div }] of pending) {
+        const status = div.querySelector(".status");
+        try {
+          status.textContent = "converting…";
+          const webp = await pngToWebp(file, parseInt(qualityInput.value, 10));
+          items.get(id).webpBlob = webp;
+          div.classList.add("done");
+          status.textContent = "done";
+          div.querySelector("button").disabled = false;
+        } catch (err) {
+          div.classList.add("error");
+          status.textContent = "error";
+        }
+      }
+      updateBulkButton();
+    }
+
+    function pngToWebp(file, quality) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0);
+          canvas.toBlob(
+            (blob) => blob ? resolve(blob) : reject(new Error("Conversion failed")),
+            "image/webp",
+            quality / 100
+          );
+        };
+        img.onerror = () => reject(new Error("Invalid image"));
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    function download(id) {
+      const { file, webpBlob } = items.get(id);
+      if (!webpBlob) return;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(webpBlob);
+      a.download = file.name.replace(/\.png$/i, ".webp");
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    document.getElementById("bulkDownload").addEventListener("click", async () => {
+      const done = [...items.entries()].filter(([_, v]) => v.webpBlob !== null);
+      if (done.length === 0) return;
+      const btn = document.getElementById("bulkDownload");
+      btn.disabled = true;
+      btn.textContent = "Zipping…";
+      const zip = new JSZip();
+      for (const [_, { file, webpBlob }] of done) {
+        zip.file(file.name.replace(/\.png$/i, ".webp"), webpBlob);
+      }
+      const blob = await zip.generateAsync({ type: "blob" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "webp-converted.zip";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      btn.disabled = false;
+      btn.textContent = "Download all";
+    });
+
+    function escapeHtml(s) {
+      const el = document.createElement("span");
+      el.textContent = s;
+      return el.innerHTML;
+    }
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + " B";
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+  </script>
+</body>
+</html>

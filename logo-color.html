@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logo color</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: "IBM Plex Mono", "Consolas", monospace;
+      background: #0d0d0d;
+      color: #e0e0e0;
+      min-height: 100vh;
+      margin: 0;
+      padding: 2rem;
+    }
+    h1 {
+      font-size: 1rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin: 0 0 2rem;
+      color: #888;
+    }
+    .dropzone {
+      border: 2px dashed #333;
+      border-radius: 8px;
+      padding: 3rem 2rem;
+      text-align: center;
+      transition: border-color 0.15s, background 0.15s;
+      cursor: pointer;
+      max-width: 560px;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: #444;
+      background: #141414;
+    }
+    .dropzone p { margin: 0; color: #666; font-size: 0.9rem; }
+    input[type="file"] { display: none; }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 1.5rem;
+      max-width: 560px;
+    }
+    .row label { color: #666; font-size: 0.85rem; }
+    input[type="color"] {
+      width: 48px;
+      height: 32px;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 0;
+      background: #111;
+      cursor: pointer;
+    }
+    button {
+      background: #222;
+      border: 1px solid #444;
+      color: #ccc;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.85rem;
+    }
+    button:hover:not(:disabled) { background: #2a2a2a; border-color: #555; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .preview-wrap {
+      margin-top: 1.5rem;
+      background:
+        linear-gradient(45deg, #1a1a1a 25%, transparent 25%),
+        linear-gradient(-45deg, #1a1a1a 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #1a1a1a 75%),
+        linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 1rem;
+      display: inline-block;
+      max-width: 100%;
+    }
+    .preview-wrap canvas { display: block; max-width: 100%; height: auto; }
+    .hint { margin-top: 1rem; color: #444; font-size: 0.75rem; max-width: 560px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <h1>Logo · recolor</h1>
+  <div class="dropzone" id="dropzone">
+    <p>Drop a PNG logo here or click to select</p>
+    <input type="file" id="fileInput" accept="image/png">
+  </div>
+  <div class="row">
+    <label for="colorPick">New color</label>
+    <input type="color" id="colorPick" value="#ffffff">
+    <button type="button" id="downloadBtn" disabled>Download PNG</button>
+  </div>
+  <div class="preview-wrap" id="previewWrap" style="display:none;">
+    <canvas id="canvas"></canvas>
+  </div>
+  <p class="hint">Replaces RGB of every pixel with nonzero alpha using the picked color; alpha unchanged. Flat single‑color logos on transparency work best.</p>
+
+  <script>
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("fileInput");
+    const colorPick = document.getElementById("colorPick");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const canvas = document.getElementById("canvas");
+    const previewWrap = document.getElementById("previewWrap");
+    const ctx = canvas.getContext("2d");
+
+    let currentName = "logo";
+    /** @type {ImageData | null} */
+    let baseImageData = null;
+
+    dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("dragover");
+      const f = e.dataTransfer.files[0];
+      if (f && f.type === "image/png") loadFile(f);
+    });
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files[0];
+      if (f) loadFile(f);
+      fileInput.value = "";
+    });
+    colorPick.addEventListener("input", () => { if (baseImageData) applyColor(); });
+
+    function hexToRgb(hex) {
+      const n = hex.replace("#", "");
+      const v = parseInt(n.length === 3 ? n.split("").map((c) => c + c).join("") : n, 16);
+      return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+    }
+
+    function loadFile(file) {
+      currentName = file.name.replace(/\.png$/i, "") || "logo";
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        ctx.drawImage(img, 0, 0);
+        baseImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        applyColor();
+        previewWrap.style.display = "inline-block";
+        downloadBtn.disabled = false;
+      };
+      img.onerror = () => URL.revokeObjectURL(url);
+      img.src = url;
+    }
+
+    function applyColor() {
+      if (!baseImageData) return;
+      const [tr, tg, tb] = hexToRgb(colorPick.value);
+      const d = new ImageData(
+        new Uint8ClampedArray(baseImageData.data),
+        baseImageData.width,
+        baseImageData.height
+      );
+      const data = d.data;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] === 0) continue;
+        data[i] = tr;
+        data[i + 1] = tg;
+        data[i + 2] = tb;
+      }
+      ctx.putImageData(d, 0, 0);
+    }
+
+    downloadBtn.addEventListener("click", () => {
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `${currentName}-recolored.png`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }, "image/png");
+    });
+  </script>
+</body>
+</html>

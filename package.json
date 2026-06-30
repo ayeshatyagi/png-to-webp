@@ -1,0 +1,16 @@
+{
+  "name": "png-to-webp",
+  "version": "1.0.0",
+  "description": "Convert PNG images to WebP format",
+  "type": "module",
+  "bin": {
+    "png2webp": "./index.js"
+  },
+  "scripts": {
+    "convert": "node index.js",
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  }
+}
